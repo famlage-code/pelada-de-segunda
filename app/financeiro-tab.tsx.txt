@@ -1,0 +1,230 @@
+// @ts-nocheck
+"use client";
+import React, { useMemo, useState } from "react";
+
+const PRICES = { Mensalista: 100, Diarista: 35 };
+const CHURRASCO_PRICE = 27;
+
+const brl = (value) => Number(value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+const today = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const formatDate = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
+
+export default function FinanceiroTab({ players, expenses, dayAttendance = {}, selectedDate, onAdd, onDelete }) {
+  const [description, setDescription] = useState("");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(today());
+  const [saving, setSaving] = useState(false);
+
+  const summary = useMemo(() => {
+    const result = {
+      mensalistaPago: 0,
+      diaristaPago: 0,
+      churrascoPago: 0,
+      churrascoCount: 0,
+      pendentePelada: 0,
+      devedores: [],
+    };
+
+    players.forEach((p) => {
+      const price = PRICES[p.type] || 0;
+      if (price > 0) {
+        if (p.paymentStatus === "Pago") {
+          if (p.type === "Mensalista") result.mensalistaPago += price;
+          else result.diaristaPago += price;
+        } else {
+          result.pendentePelada += price;
+          result.devedores.push({ name: p.name, value: price });
+        }
+      }
+      const inChurrasco = Boolean(dayAttendance?.[p.id]?.churrasco ?? p.churrascoPaid);
+      if (inChurrasco) {
+        result.churrascoPago += CHURRASCO_PRICE;
+        result.churrascoCount += 1;
+      }
+    });
+
+    return result;
+  }, [players, dayAttendance]);
+
+  const totalRecebido = summary.mensalistaPago + summary.diaristaPago + summary.churrascoPago;
+  const totalGasto = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+  const saldo = totalRecebido - totalGasto;
+
+  const sortedExpenses = useMemo(() => [...expenses].sort((a, b) => (b.date || "").localeCompare(a.date || "")), [expenses]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const value = parseFloat(String(amount).replace(",", "."));
+    if (!description.trim()) return alert("Descreva o gasto.");
+    if (!Number.isFinite(value) || value <= 0) return alert("Informe um valor maior que zero.");
+    setSaving(true);
+    const ok = await onAdd({
+      description: description.trim(),
+      amount: Math.round(value * 100) / 100,
+      date: date || today(),
+    });
+    setSaving(false);
+    if (ok) {
+      setDescription("");
+      setAmount("");
+      setDate(today());
+    }
+  };
+
+  const copySummary = async () => {
+    const lines = [
+      "💰 *CONSOLIDADO FINANCEIRO - PELADA DE SEGUNDA*",
+      "",
+      `Mensalidades pagas: ${brl(summary.mensalistaPago)}`,
+      `Diárias pagas: ${brl(summary.diaristaPago)}`,
+      `Churrasco (${summary.churrascoCount}x): ${brl(summary.churrascoPago)}`,
+      `*Total recebido: ${brl(totalRecebido)}*`,
+      "",
+      `*Total gasto: ${brl(totalGasto)}*`,
+      ...sortedExpenses.map((x) => `- ${formatDate(x.date)} ${x.description}: ${brl(x.amount)}`),
+      "",
+      `*Saldo em caixa: ${brl(saldo)}*`,
+      `A receber (pelada): ${brl(summary.pendentePelada)}`,
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      alert("Consolidado copiado! Cole no WhatsApp.");
+    } catch {
+      alert("Não foi possível copiar. Tente de novo.");
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+      <div style={cardStyle}>
+        <div style={headerRow}>
+          <h2 style={titleStyle}>Consolidado</h2>
+          <button type="button" onClick={copySummary} style={btnCopyStyle}>
+            Copiar resumo
+          </button>
+        </div>
+
+        <div style={saldoBox(saldo >= 0)}>
+          <span style={{ fontSize: "12px", fontWeight: 600 }}>Saldo em caixa</span>
+          <strong style={{ fontSize: "26px" }}>{brl(saldo)}</strong>
+        </div>
+
+        <div style={gridStyle}>
+          <div style={statBox("#d4edda", "#155724")}>
+            <span style={statLabel}>Recebido</span>
+            <strong style={statValue}>{brl(totalRecebido)}</strong>
+          </div>
+          <div style={statBox("#f8d7da", "#721c24")}>
+            <span style={statLabel}>Gasto</span>
+            <strong style={statValue}>{brl(totalGasto)}</strong>
+          </div>
+        </div>
+
+        <ul style={listStyle}>
+          <li style={lineStyle}>
+            <span>Mensalidades pagas</span>
+            <strong>{brl(summary.mensalistaPago)}</strong>
+          </li>
+          <li style={lineStyle}>
+            <span>Diárias pagas</span>
+            <strong>{brl(summary.diaristaPago)}</strong>
+          </li>
+          <li style={lineStyle}>
+            <span>Churrasco ({summary.churrascoCount} marcados{selectedDate ? ` em ${formatDate(selectedDate)}` : ""})</span>
+            <strong>{brl(summary.churrascoPago)}</strong>
+          </li>
+          <li style={{ ...lineStyle, color: "#856404" }}>
+            <span>A receber (pelada)</span>
+            <strong>{brl(summary.pendentePelada)}</strong>
+          </li>
+        </ul>
+
+        <p style={noteStyle}>Os valores refletem o status de pagamento dos atletas e os marcados no churrasco da data selecionada na aba Jogo &amp; Lista.</p>
+      </div>
+
+      {summary.devedores.length > 0 && (
+        <div style={cardStyle}>
+          <h2 style={titleStyle}>Pendentes ({summary.devedores.length})</h2>
+          <ul style={listStyle}>
+            {summary.devedores.map((d) => (
+              <li key={d.name} style={lineStyle}>
+                <span>{d.name}</span>
+                <strong style={{ color: "#721c24" }}>{brl(d.value)}</strong>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div style={cardStyle}>
+        <h2 style={titleStyle}>Registrar gasto</h2>
+        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <label style={labelStyle}>
+            Descrição
+            <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Ex.: Aluguel da quadra" style={inputStyle} />
+          </label>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <label style={{ ...labelStyle, flex: 1 }}>
+              Valor (R$)
+              <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="0,00" style={inputStyle} />
+            </label>
+            <label style={{ ...labelStyle, flex: 1 }}>
+              Data
+              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
+            </label>
+          </div>
+          <button type="submit" disabled={saving} style={btnAddStyle}>
+            {saving ? "Salvando..." : "Adicionar gasto"}
+          </button>
+        </form>
+      </div>
+
+      <div style={cardStyle}>
+        <h2 style={titleStyle}>Gastos ({sortedExpenses.length})</h2>
+        {sortedExpenses.length === 0 ? (
+          <p style={noteStyle}>Nenhum gasto registrado ainda.</p>
+        ) : (
+          <ul style={listStyle}>
+            {sortedExpenses.map((x) => (
+              <li key={x.id} style={{ ...lineStyle, gap: "8px" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, wordBreak: "break-word" }}>{x.description}</div>
+                  <div style={{ fontSize: "12px", color: "#555" }}>{formatDate(x.date)}</div>
+                </div>
+                <strong style={{ color: "#721c24", whiteSpace: "nowrap" }}>{brl(x.amount)}</strong>
+                <button type="button" onClick={() => onDelete(x)} aria-label={`Excluir gasto ${x.description}`} style={btnDeleteStyle}>
+                  Excluir
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const cardStyle = { backgroundColor: "#fff", padding: "14px", borderRadius: "8px", boxShadow: "0 1px 3px rgba(0,0,0,0.1)", color: "#000" };
+const headerRow = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", marginBottom: "10px" };
+const titleStyle = { fontSize: "16px", fontWeight: 700, margin: "0 0 10px 0", color: "#000" };
+const saldoBox = (positive) => ({ display: "flex", flexDirection: "column", gap: "2px", padding: "12px", borderRadius: "8px", marginBottom: "10px", backgroundColor: positive ? "#e8f5e9" : "#fdecea", color: positive ? "#1b5e20" : "#721c24" });
+const gridStyle = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "10px" };
+const statBox = (bg, color) => ({ display: "flex", flexDirection: "column", gap: "2px", padding: "10px", borderRadius: "8px", backgroundColor: bg, color });
+const statLabel = { fontSize: "12px", fontWeight: 600 };
+const statValue = { fontSize: "18px" };
+const listStyle = { listStyle: "none", margin: 0, padding: 0 };
+const lineStyle = { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #eee", fontSize: "14px" };
+const noteStyle = { fontSize: "12px", color: "#555", margin: "10px 0 0 0" };
+const labelStyle = { display: "flex", flexDirection: "column", gap: "4px", fontSize: "12px", fontWeight: 600, color: "#000" };
+const inputStyle = { padding: "10px", minHeight: "44px", fontSize: "16px", borderRadius: "6px", border: "1px solid #bbb", backgroundColor: "#fff", color: "#000", width: "100%", boxSizing: "border-box" };
+const btnAddStyle = { minHeight: "44px", border: "none", borderRadius: "6px", backgroundColor: "#111", color: "#fff", fontSize: "15px", fontWeight: 700, cursor: "pointer" };
+const btnCopyStyle = { minHeight: "36px", padding: "0 12px", border: "none", borderRadius: "6px", backgroundColor: "#25d366", color: "#000", fontSize: "13px", fontWeight: 700, cursor: "pointer" };
+const btnDeleteStyle = { minHeight: "36px", padding: "0 10px", border: "1px solid #e0a8ae", borderRadius: "6px", backgroundColor: "#f8d7da", color: "#721c24", fontSize: "12px", fontWeight: 700, cursor: "pointer" };
